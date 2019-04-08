@@ -2,14 +2,12 @@
 #
 # This module is for simulating TEM images for various requirements such as
 # through-focus series, ptychographic diff. patterns etc.
-# The module consists of 3 functions currently - 
+# The module consists of 2 functions currently -
 # (1) Obj_Setup - This function defines the object wave function i.e. amplitude, phase for the object
 #                 This will need to be modified manually to vary the configurations. Currently setup
 #                 for a disc of magnetic material forming a vortex state.
 # (2) simTFS -    This function will use the Object defined using Obj_Setup and simulate the through-focus
 #                 series of images for either linear or quadratic defocus series.
-# (3) simPtycho - This fuction will also use the Object defined using Obj_Setup and simulate the ptychographic
-#                 image series for scanning the probe across the sample and storing DPs as well as ProbeGuess.
 #
 # Written, CD Phatak, ANL, 05.Mar.2015.
 
@@ -148,150 +146,6 @@ def simTFS(microscope,
 
     #end of function
     return 1
-
-def simPtycho(microscope,
-        jobID = 'simPtycho',
-        path = '/Users/cphatak/',
-        dim = 256,
-        del_px = 1.0,
-        num_x = 10,
-        num_y = 10,
-        defocus = 5000.0, #nm
-        aperture = 80.0, #nm
-        pr_shift = 10.0, #nm
-        ObjWave = np.zeros([256,256],dtype='complex'),
-        ran_shift = False,
-        display = False,
-        saveimg = False,
-        fullTF = False):
-
-    # This function will take the first argument as the microscope object and additional 
-    # parameters for dim, pixel size, num_x and num_y for steps along x and y, defocus of 
-    # the probe, aperture size, probe shift. The jobID and path are used as prefix to save
-    # all the data (ProbeGuess in CSV, DPs in H5, Probe positions in float32 format).
-
-    #Dimensiond and coordinates
-    d2 = dim/2
-    line = np.arange(dim) - float(d2)
-    [X,Y] = np.meshgrid(line,line)
-    th = np.arctan2(Y,X)
-    qq = np.sqrt(X**2 + Y**2) / float(dim)
-
-    #Set the aperture
-    res = microscope.setAperture(qq, del_px, aperture)
-
-    #Next we set the defocus
-    microscope.defocus = defocus
-    #Get the transfer function.
-    if fullTF:
-        Probe_q = microscope.getTransferFunction(qq, del_px)
-    else:
-        Chiq = microscope.getChiQ(qq, del_px)
-        Probe_q = microscope.aperture * (np.cos(Chiq) - 1j * np.sin(Chiq))
-    #Calculate the probe in real space.
-    Probe = np.fft.fftshift(np.fft.ifftn(np.fft.ifftshift(Probe_q)))
-    Probe_Img = np.abs(Probe)**2
-
-    #Save the Probe in complex format
-    fname=path+jobID+'_ProbeGuess'
-    np.savetxt(fname+'.csv',Probe,delimiter=',')
-    np.savetxt(fname+'_real.txt',Probe.real)
-    np.savetxt(fname+'_imag.txt',Probe.imag)
-
-    #Compute Probe size
-    pr_img_bin = np.zeros(Probe_Img.shape)
-    pr_img_bin[Probe_Img > 1.e-5] = 1.0
-    pr_size = np.sqrt(np.sum(pr_img_bin) / np.pi) * 2.0 #diameter
-
-    #Check if ObjFunc is supplied as an argument
-    tot = np.sum(ObjWave)
-    if (tot == 0):
-        #Object is not defined. We use the default ObjSetup
-        #Get the Object Amp and Phase to compute Wavefunction
-        [Amp, Mphi, Ephi] = Obj_Setup(dim=dim, del_px=del_px)
-
-        #Create ObjWave
-        Ephi *= microscope.sigma
-        Tphi = Mphi + Ephi
-        ObjWave = Amp * (np.cos(Tphi) + 1j * np.sin(Tphi))
-
-        if saveimg:
-            skimage_io.imsave(path+jobID+'_Amp.tiff',Amp.astype('float32'),plugin='tifffile')
-            skimage_io.imsave(path+jobID+'_Mphi.tiff',Mphi.astype('float32'),plugin='tifffile')
-            skimage_io.imsave(path+jobID+'_Ephi.tiff',Ephi.astype('float32'),plugin='tifffile')
-            skimage_io.imsave(path+jobID+'_Tphi.tiff',Tphi.astype('float32'),plugin='tifffile')
-
-
-    if display:
-        p.ion()
-        fig, (im1,im2) = p.subplots(nrows=1,ncols=2,figsize=(6,3))
-        time.sleep(0.05)
-
-    #print out the required data
-    print( "Dimensions    (px):", dim)
-    print( "Pixel size (nm/px):", del_px)
-    print( "Probe Size    (nm):", pr_size * del_px)
-    print( "Probe Shift   (nm):", pr_shift)
-    print( "Scan Dims  (Nx,Ny):", num_x,num_y)
-    print( "Wavelength    (nm):", microscope.lam)
-    #save the simulation data to a file as well
-    sim_file = open(path+jobID+'_sim_details.txt', 'w')
-    sim_file.write("Dimension     (px): %s \n" % dim)
-    sim_file.write("Pixel size (nm/px): %s \n" % del_px)
-    sim_file.write("Probe Size    (nm): %s \n" % (pr_size * del_px))
-    sim_file.write("Probe Shift   (nm): %s \n" % pr_shift)
-    sim_file.write("Scan Dims  (Nx,Ny): %s,%s \n" % (num_x,num_y))
-    sim_file.write("Wavelength    (nm): %s \n" % microscope.lam)
-    sim_file.close()
-
-    #HDF5 file path
-    h5_file_path = '/entry/instrument/detector/data'
-
-    #Precompute the interpolates for probe shift
-    Probe_a = spline_2d(line,line,Probe.real)
-    Probe_b = spline_2d(line,line,Probe.imag)
-
-    #Loop over scan positions
-    count = 0
-    for ix in range(-num_x/2,num_x/2):
-        for iy in range(-num_y/2,num_y/2):
-            #Compute interpolated probe position
-            Probe_s = np.zeros(Probe.shape, dtype=Probe.dtype)
-            xs = ix * pr_shift
-            ys = iy * pr_shift
-            if ran_shift:
-                xs += np.random.randint(-3,4)
-                ys += np.random.randint(-3,4)
-
-            #Probe_s.real = Probe_a(line + xs, line + ys)
-            #Probe_s.imag = Probe_b(line + xs, line + ys)
-            Probe_s = np.roll(np.roll(Probe, int(xs), axis=0), int(ys), axis=1)
-
-            #Save probe image
-            Probe_s_Img = np.abs(Probe_s)**2
-            skimage_io.imsave(path+jobID+'_ProbePos_'+str(count).zfill(4)+'.tiff',
-                    Probe_s_Img.astype('float32'), plugin='tifffile')
-            #Compute DP
-            Dp_Img_s = np.abs(np.fft.fftshift(np.fft.fftn(ObjWave * Probe_s)))**2
-            fname = path+jobID+'_DpScan_'+str(count).zfill(4)+'.h5'
-            h5py.File(fname)[h5_file_path] = Dp_Img_s.astype('float32')
-            #Increment count
-            count += 1
-
-            if display:
-                im1.imshow(Probe_s_Img,cmap=p.cm.gray)
-                im1.axis('off')
-                im1.set_title('ProbePos',fontsize=20)
-                im2.imshow(Dp_Img_s,cmap=p.cm.gray)
-                im2.axis('off')
-                im2.set_title('DiffPatt',fontsize=20)
-                fig.subplots_adjust(wspace=0.02, hspace=0.02, top=0.9,
-                        bottom=0.02, left=0.02, right=0.98)
-                p.draw()
-
-    #End of function
-    return 1
-
 
 
 

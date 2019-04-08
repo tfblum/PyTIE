@@ -2,10 +2,9 @@
 #
 # This module contains routines for retrieval of phase using various methods.
 # Currently implemented methods are FSR (Focal series reconstruction), 
-# Ptychography (ePIE). Future work will also include TIE.
+# Future work will also include TIE.
 # The functions are :
 # 1) fsr.py - Focal series reconstruction using iterative approach.
-# 2) ePIE.py - Pytchography reconstruction using ePIE method.
 #
 # Written CD Phatak, ANL, 24.Mar.2015.
 
@@ -158,151 +157,6 @@ def fsr(niter=100,display=True):
 
     return 1
 
-def ePIE(jobID = 'simPtycho',
-        probefile = 'ProbeGuess.csv', \
-        num_x = 10, \
-        num_y = 10, \
-        pr_shift = 10, \
-        del_px = 1.0, \
-        path = '/Users/cphatak/', \
-        dpfile = 'DpScan_',\
-        niter = 1,
-        dim = 256,
-        display=False,
-        ProbeUpdate=False):
-
-    #Simple implementation of the ePIE routine from [2] to reconstruct wavefunctions
-    #from simulated data.
-    #
-    # [2] A.M. Maiden, J.M. Rodenburg, Ultramicroscopy, 109, 1256-1262 (2009).
-    #
-
-    start_time = time.time()
-
-    #Once we have the input first read the guess probe
-    Pr_guess = np.genfromtxt(probefile, delimiter=',', dtype=complex)
-    
-    #create a mask based on the guess probe for DP
-    Dp_blank = np.abs(np.fft.fftshift(np.fft.fftn(Pr_guess)))**2
-    Dp_mask = np.ones(Dp_blank.shape)
-    Dp_mask[Dp_blank == 0] = 0.0
-
-    #parameters needed in reconstruction
-    alpha = 1.0
-    beta = 1.0
-
-    #array to store error values
-    err_vals = np.zeros(niter)
-
-    #array for selecting random sequence of DPs
-    dp_nums = np.arange(num_x * num_y)
-    #H5 file path
-    h5_file_path = '/entry/instrument/detector/data'
-
-    #object guess function
-    Obj_guess = np.ones([dim,dim],dtype=complex)
-    #Obj_guess = np.zeros([dim,dim],dtype=complex)
-
-    #Compute the interpolation for shifting the probe
-    line = np.arange(dim) - float(dim/2)
-
-    #Display
-    if display:
-        #show the reconstruction steps...
-        p.ion()
-        fig, (im1,im2,im3) = p.subplots(nrows=1, ncols=3, figsize=(9,3))
-        time.sleep(0.05)
-
-
-    for i in range(niter):
-
-        #Loop through each DP randomly and go through PIE iteration
-        np.random.shuffle(dp_nums)
-
-        print 'Iteration: ',i
-
-        for j in range(num_x*num_y):
-            #load DP
-            d = dp_nums[j]
-            Dp_Img = h5py.File(path+dpfile + str(d).zfill(4) + '.h5')[h5_file_path]
-            #Multiply by the mask
-            #Dp_Img *= Dp_blank
-            #p.subplot(131)
-            #p.imshow(Dp_Img)
-            #p.draw()
-            #time.sleep(0.5)
-
-            #determine the shifts
-            xs = pr_shift*(d/num_x) - (num_x/2)*pr_shift
-            ys = pr_shift*(np.mod(d,num_y)) - (num_y/2)*pr_shift
-
-            #Compute the interpolated probe position
-            #Pr_a = RectBivariateSpline(line,line,Pr_guess.real)
-            #Pr_b = RectBivariateSpline(line,line,Pr_guess.imag)
-            #Pr_shift = np.zeros(Pr_guess.shape,dtype=Pr_guess.dtype)
-            #Pr_shift.real = Pr_a(line + xs, line + ys)
-            #Pr_shift.imag = Pr_b(line + xs, line + ys)
-
-            #update from Youssef to shift the probe rather than interpolate.
-            Pr_shift = np.roll(np.roll(Pr_guess, int(xs), axis=0), int(ys), axis=1)
-            #p.subplot(132)
-            #p.imshow(np.abs(Pr_shift)**2)
-            #p.draw()
-            #time.sleep(0.5)
-
-            #Compute the exit wave
-            psi_j_r = Obj_guess * Pr_shift
-            
-            #Replace amplitude with measured diffraction
-            psi_j_u = np.fft.fftshift(np.fft.fftn(psi_j_r))
-            #Psi_j_u = np.sqrt(Dp_Img) * psi_j_u / np.abs(psi_j_u)
-            Psi_j_u = np.sqrt(Dp_Img) * np.exp(complex(0.,1.) * np.angle(psi_j_u)) 
-
-            #Transform back
-            psip_j_r = np.fft.ifftn(np.fft.ifftshift(Psi_j_u))
-
-            #Update Object Wavefunction
-            Obj_guess += alpha * np.conj(Pr_shift) / np.amax(np.abs(Pr_shift)**2) * (psip_j_r - psi_j_r)
-
-            if ProbeUpdate and i > 10:
-                #Update the Prove Wavefunction
-                
-                #Shift the Obj Wavefunction
-                #Ob_a = RectBivariateSpline(line,line,Obj_guess.real)
-                #Ob_b = RectBivariateSpline(line,line,Obj_guess.imag)
-                #Ob_shift = np.zeros(Obj_guess.shape,dtype=Obj_guess.dtype)
-                #Ob_shift.real = Ob_a(line - xs, line - ys)
-                #Ob_shift.imag = Ob_b(line - xs, line - ys)
-                Ob_shift = np.roll(np.roll(Obj_guess, -int(xs), axis=0), -int(ys), axis=1)
-
-                Pr_guess += beta * np.conj(Ob_shift) / np.amax(np.abs(Ob_shift)**2) * (psip_j_r - psi_j_r)
-
-            
-        if display:
-            #p.subplot(131)
-            im1.imshow(np.abs(Obj_guess),cmap=p.cm.gray)
-            im1.axis('off')
-            im1.set_title('|Obj|',fontsize=20)
-            #p.subplot(132)
-            im2.imshow(np.angle(Obj_guess),cmap=p.cm.gray)
-            im2.axis('off')
-            im2.set_title('Obj_Phi',fontsize=20)
-            #p.subplot(133)
-            im3.imshow(np.abs(Pr_guess),cmap=p.cm.hsv)
-            im3.axis('off')
-            im3.set_title('Probe',fontsize=20)
-            fig.subplots_adjust(wspace=0.02, hspace=0.02, top=0.9,
-                    bottom=0.02,left=0.02,right=0.98)
-            p.draw()
-
-    
-
-    #save the Obj_guess
-    np.savetxt(path+jobID+'ObjRecon'+str(niter).zfill(4)+'_init1.csv',Obj_guess,delimiter=',')
-    np.savetxt(path+jobID+'PrRecon'+str(niter).zfill(4)+'_init1.csv',Pr_guess,delimiter=',')
-    print "Elapsed time was %g seconds." %(time.time()-start_time)
-
-    return 1
 
 
         
